@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# Conda / environments
+.conda/
+venv/
+.venv/
+
+# Secrets / credentials / API keys (never commit these)
+.env
+.env.*
+*.env
+secrets.*
+*.key
+*.pem
+credentials.json
+config.local.*
+anthropic_key*
+claude_key*
+api_key*
+*_api_key*
+*apikey*
+
+# macOS
+.DS_Store
+
+# Large raw datasets
+data/raw/
+
+# Generated outputs
+data/interim/
+data/processed/
+results/
+figures/
+
+# Logs
+logs/
+*.log
+
+# Claude Code / AI assistant logs, sessions & local settings
+.claude/
+.claude*/
+CLAUDE.local.md
+.anthropic/
+*.jsonl
+claude_logs/
+claude-logs/
+.aider*
+.cursor/
+
+# IDE
+.vscode/
+.idea/
+
+# Notebook / editor scratch
+*.ipynb_checkpoints
+.ipynb_checkpoints/

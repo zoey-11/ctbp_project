@@ -1,0 +1,22 @@
+name: ctbp_project
+
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.11
+  - pandas
+  - numpy
+  - scipy
+  - scikit-learn
+  - matplotlib
+  - seaborn
+  - jupyter
+  - ipykernel
+  - requests
+  - biopython
+  - tqdm
+  - openpyxl
+  - pyyaml
+  
