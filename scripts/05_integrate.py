@@ -12,6 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 INTERIM_DIR = PROJECT_ROOT / "data" / "interim"
 PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
+UNIPROT_DIR = PROJECT_ROOT / "data" / "raw" / "uniprot"
 
 PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -19,6 +20,8 @@ INTACT_FILE = INTERIM_DIR / "intact_raw.csv"
 BIOGRID_FILE = INTERIM_DIR / "biogrid_raw.csv"
 STRING_FILE = INTERIM_DIR / "string_raw.csv"
 STRING_MAPPING_FILE = INTERIM_DIR / "string_protein_mapping.csv"
+
+UNIPROT_REFERENCE = UNIPROT_DIR / "uniprot_human_reviewed.tsv.gz"
 
 
 # ============================================================
@@ -37,6 +40,33 @@ TARGETS = {
 }
 
 TARGET_UNIPROTS = set(TARGETS.keys())
+
+
+# ============================================================
+# Reviewed UniProt reference
+# ============================================================
+#
+# Pinned snapshot of reviewed human UniProtKB entries. Used to
+# resolve BioGRID accession fields that list more than one
+# accession. A local snapshot is preferred over the UniProt REST
+# API so that re-running the pipeline reproduces the same network.
+
+uniprot_reference = pd.read_csv(
+    UNIPROT_REFERENCE,
+    sep="\t",
+    dtype=str,
+    usecols=["Entry", "Entry Name", "Gene Names", "Length"],
+)
+
+reviewed_length = dict(
+    zip(
+        uniprot_reference["Entry"],
+        pd.to_numeric(
+            uniprot_reference["Length"],
+            errors="coerce",
+        ),
+    )
+)
 
 
 # ============================================================
@@ -90,23 +120,47 @@ def split_biogrid_accessions(value):
 
 def canonical_from_biogrid(value):
     """
-    Resolve a BioGRID accession field to a deterministic
+    Resolve a BioGRID accession field to a single UniProt
     accession.
 
-    BioGRID normally supplies one Swiss-Prot accession.
-    When multiple are supplied, prefer the shortest valid
-    accession and break ties alphabetically.
+    BioGRID normally supplies one Swiss-Prot accession. When it
+    supplies several, they are resolved against the reviewed
+    human UniProt snapshot in data/raw/uniprot/:
 
-    IMPORTANT:
-    This is a deterministic harmonization rule, not a claim
-    that the first BioGRID accession is biologically superior.
+      1. Discard accessions absent from the reviewed set. These
+         are deleted or demerged entries, e.g. GCNT2 Q06430,
+         superseded by Q8N0V5.
+
+      2. Of those remaining, keep the longest sequence. Short
+         entries sharing a gene name with a long one are
+         typically fragments or alternative-reading-frame
+         products rather than the canonical protein, e.g. PRNP
+         F7VJQ1 (73 aa), an alternative-frame product of the
+         253 aa P04156.
+
+      3. Break any remaining tie alphabetically so the result
+         is deterministic.
+
+    The accession selected here determines which sequence is
+    retrieved downstream for motif scanning and structural
+    modelling, so picking the wrong entry means analysing the
+    wrong molecule.
     """
-    accessions = split_biogrid_accessions(value)
+    accessions = set(split_biogrid_accessions(value))
 
     if not accessions:
         return pd.NA
 
-    return sorted(set(accessions), key=lambda x: (len(x), x))[0]
+    reviewed = accessions & reviewed_length.keys()
+
+    # Fall back to the raw set rather than dropping the record
+    # entirely when BioGRID supplies only unreviewed accessions.
+    candidates = reviewed or accessions
+
+    return sorted(
+        candidates,
+        key=lambda x: (-(reviewed_length.get(x) or 0), x),
+    )[0]
 
 
 def canonical_pair(target, partner):
@@ -254,6 +308,18 @@ for _, row in biogrid.iterrows():
         row["Official Symbol Interactor B"]
     ).strip()
 
+    accessions_a = set(
+        split_biogrid_accessions(
+            row["SWISS-PROT Accessions Interactor A"]
+        )
+    )
+
+    accessions_b = set(
+        split_biogrid_accessions(
+            row["SWISS-PROT Accessions Interactor B"]
+        )
+    )
+
     accession_a = canonical_from_biogrid(
         row["SWISS-PROT Accessions Interactor A"]
     )
@@ -262,14 +328,22 @@ for _, row in biogrid.iterrows():
         row["SWISS-PROT Accessions Interactor B"]
     )
 
-    # Determine target using the canonical accession.
-    if accession_a in TARGET_UNIPROTS:
-        target = accession_a
+    # Determine the target from the full accession set rather
+    # than the collapsed accession. A BioGRID release that adds
+    # a second accession to a CTBP1/CTBP2 record could otherwise
+    # collapse the target away and drop the record silently.
+    targets_a = accessions_a & TARGET_UNIPROTS
+    targets_b = accessions_b & TARGET_UNIPROTS
+
+    if targets_a:
+        target_is_a = True
+        target = sorted(targets_a)[0]
         partner = accession_b
         partner_gene = symbol_b
 
-    elif accession_b in TARGET_UNIPROTS:
-        target = accession_b
+    elif targets_b:
+        target_is_a = False
+        target = sorted(targets_b)[0]
         partner = accession_a
         partner_gene = symbol_a
 
@@ -308,7 +382,7 @@ for _, row in biogrid.iterrows():
             "string_combined_score": pd.NA,
             "original_partner_id": (
                 row["Official Symbol Interactor B"]
-                if accession_a in TARGET_UNIPROTS
+                if target_is_a
                 else row["Official Symbol Interactor A"]
             ),
         }
